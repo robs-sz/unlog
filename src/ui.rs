@@ -1,12 +1,13 @@
-//! Rendering: filter bar, entry list, status bar.
+//! Rendering: filter bar, wrapped entry list, status bar.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{List, ListItem, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use crate::app::{App, Mode};
+use crate::text;
 
 /// Vertical split of the terminal: filter bar, list, status bar.
 pub struct Areas {
@@ -30,21 +31,68 @@ pub fn render(frame: &mut Frame, app: &App) {
 
     frame.render_widget(Paragraph::new(filter_line(app)), areas.filter);
     frame.render_widget(Paragraph::new(status_line(app)), areas.help);
+    frame.render_widget(Paragraph::new(list_lines(app, areas.list)), areas.list);
+}
 
-    // Only the visible window is materialised: formatting every entry of a
-    // large history on each frame is wasteful. `App` owns the scroll offset,
-    // so the window is already sliced and must be rendered without an
-    // additional `ListState` offset.
-    let height = areas.list.height as usize;
-    let items: Vec<ListItem> = app
+/// Builds the visible rows, wrapping each entry's command across as many rows as
+/// it needs. Entries are wrapped only for the window being drawn, so a large
+/// history costs no more than a screenful of work per frame.
+fn list_lines<'a>(app: &'a App, area: Rect) -> Vec<Line<'a>> {
+    let height = area.height as usize;
+    let width = app.text_width();
+    let digits = app.index_width();
+    let indent = " ".repeat(app.prefix_width());
+    let mut lines = Vec::with_capacity(height);
+
+    for position in app.top..app.filtered.len() {
+        if lines.len() >= height {
+            break;
+        }
+        let index = app.filtered[position];
+        let marker = if app.selected.contains(&index) {
+            "[\u{2022}]"
+        } else {
+            "[ ]"
+        };
+        let style = row_style(app, position);
+        let command = text::sanitize(&app.entries[index].command);
+
+        for (row, chunk) in text::rows(&command, width)
+            .into_iter()
+            .enumerate()
+            .skip(app.skip)
+        {
+            if lines.len() >= height {
+                break;
+            }
+            if row == 0 {
+                lines.push(Line::styled(
+                    format!("{marker} {index:>digits$}  {chunk}"),
+                    style,
+                ));
+            } else {
+                lines.push(Line::styled(format!("{indent}{chunk}"), style));
+            }
+        }
+    }
+
+    lines
+}
+
+/// The cursor wins over the selection colour, but keeps it.
+fn row_style(app: &App, position: usize) -> Style {
+    let mut style = Style::default();
+    if app
         .filtered
-        .iter()
-        .enumerate()
-        .skip(app.scroll)
-        .take(height)
-        .map(|(position, &index)| row(app, position, index))
-        .collect();
-    frame.render_widget(List::new(items), areas.list);
+        .get(position)
+        .is_some_and(|index| app.selected.contains(index))
+    {
+        style = style.fg(Color::Green).add_modifier(Modifier::BOLD);
+    }
+    if position == app.cursor {
+        style = style.add_modifier(Modifier::REVERSED);
+    }
+    style
 }
 
 fn filter_line(app: &App) -> Line<'_> {
@@ -114,38 +162,4 @@ fn status_line(app: &App) -> Line<'_> {
             Style::default().fg(Color::DarkGray),
         ),
     }
-}
-
-fn row(app: &App, position: usize, index: usize) -> ListItem<'_> {
-    let entry = &app.entries[index];
-    let selected = app.selected.contains(&index);
-    let cursor = position == app.cursor;
-
-    let mut style = Style::default();
-    if selected {
-        style = style.fg(Color::Green).add_modifier(Modifier::BOLD);
-    }
-    if cursor {
-        // The cursor wins over the selection colour, but keeps it.
-        style = style.add_modifier(Modifier::REVERSED);
-    }
-
-    let marker = if selected { "[\u{2022}]" } else { "[ ]" };
-    ListItem::new(Line::styled(
-        format!("{marker} {index:>5}  {}", sanitize(&entry.command)),
-        style,
-    ))
-}
-
-/// Commands can span lines; the list shows one row per entry.
-fn sanitize(command: &str) -> String {
-    command
-        .chars()
-        .map(|c| match c {
-            '\n' => '\u{23ce}',
-            '\t' => ' ',
-            c if c.is_control() => ' ',
-            c => c,
-        })
-        .collect()
 }

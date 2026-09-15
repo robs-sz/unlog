@@ -4,6 +4,14 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::history::HistoryEntry;
+use crate::text;
+
+/// Columns the selection marker occupies, including its trailing space.
+const MARKER_WIDTH: usize = 4;
+/// Columns between the entry index and the command text.
+const GAP_WIDTH: usize = 2;
+/// Minimum width of the entry index column.
+const MIN_INDEX_WIDTH: usize = 5;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -30,12 +38,17 @@ pub struct App {
     pub min_length: Option<usize>,
     /// Maximum command length in characters; `None` means no upper bound.
     pub max_length: Option<usize>,
-    /// First visible row of the list.
-    pub scroll: usize,
-    /// Position within `filtered`.
+    /// Position within `filtered` holding the cursor.
     pub cursor: usize,
-    /// Rows the list can display; kept up to date by the render loop.
+    /// Position within `filtered` of the entry the window starts at.
+    pub top: usize,
+    /// Wrapped rows of `filtered[top]` scrolled past, so tall entries can be
+    /// partly scrolled through without a cursor position per row.
+    pub skip: usize,
+    /// Rows the list area can display.
     pub viewport: usize,
+    /// Columns the list area has; the command text wraps to the rest.
+    pub list_width: usize,
     pub mode: Mode,
     pub history_path: PathBuf,
     /// Write failure shown in the status bar for one frame.
@@ -51,9 +64,11 @@ impl App {
             text_filter: String::new(),
             min_length: None,
             max_length: None,
-            scroll: 0,
             cursor: 0,
+            top: 0,
+            skip: 0,
             viewport: 20,
+            list_width: 80,
             mode: Mode::Normal,
             history_path,
             error_msg: None,
@@ -81,23 +96,120 @@ impl App {
 
         if self.filtered.is_empty() {
             self.cursor = 0;
-            self.scroll = 0;
+            self.top = 0;
+            self.skip = 0;
         } else {
             self.cursor = self.cursor.min(self.filtered.len() - 1);
+            self.top = self.top.min(self.filtered.len() - 1);
             self.ensure_visible();
         }
     }
 
-    /// Scrolls the minimum amount needed to keep the cursor on screen.
-    pub fn ensure_visible(&mut self) {
-        let height = self.viewport.max(1);
-        if self.cursor < self.scroll {
-            self.scroll = self.cursor;
-        } else if self.cursor >= self.scroll + height {
-            self.scroll = self.cursor + 1 - height;
+    /// Width of the entry index column for the current number of entries.
+    pub fn index_width(&self) -> usize {
+        self.entries
+            .len()
+            .saturating_sub(1)
+            .to_string()
+            .len()
+            .max(MIN_INDEX_WIDTH)
+    }
+
+    /// Columns of a list row before the command text starts.
+    pub fn prefix_width(&self) -> usize {
+        MARKER_WIDTH + self.index_width() + GAP_WIDTH
+    }
+
+    /// Columns available for command text, which is what wrapping is computed
+    /// against.
+    pub fn text_width(&self) -> usize {
+        self.list_width.saturating_sub(self.prefix_width()).max(1)
+    }
+
+    /// Rows `filtered[position]` occupies when wrapped.
+    pub fn entry_height(&self, position: usize) -> usize {
+        match self.filtered.get(position) {
+            Some(&index) => text::height(&self.entries[index].command, self.text_width()),
+            None => 0,
         }
-        let max_scroll = self.filtered.len().saturating_sub(height);
-        self.scroll = self.scroll.min(max_scroll);
+    }
+
+    /// Records the list area size and re-fits the window.
+    pub fn set_viewport(&mut self, width: usize, height: usize) {
+        self.list_width = width;
+        self.viewport = height;
+        self.ensure_visible();
+    }
+
+    /// Scrolls the minimum amount needed to keep the cursor on screen.
+    ///
+    /// Walks rows from the window anchor instead of counting entries, because an
+    /// entry can occupy many rows. The walk stops as soon as the window is full,
+    /// so it never costs more than a viewport's worth of wrapped entries.
+    pub fn ensure_visible(&mut self) {
+        if self.filtered.is_empty() {
+            self.top = 0;
+            self.skip = 0;
+            return;
+        }
+        let height = self.viewport.max(1);
+        self.cursor = self.cursor.min(self.filtered.len() - 1);
+        if self.top > self.cursor {
+            self.top = self.cursor;
+            self.skip = 0;
+        }
+
+        // Rows of the window consumed before the cursor entry begins.
+        let mut used = 0;
+        let mut position = self.top;
+        loop {
+            let rows = self.entry_height(position);
+            let skipped = if position == self.top {
+                self.skip.min(rows - 1)
+            } else {
+                0
+            };
+
+            if position == self.cursor {
+                if rows > height {
+                    // Taller than the window: show its first rows so the
+                    // command's opening words, which identify it, stay visible.
+                    self.top = self.cursor;
+                    self.skip = 0;
+                } else if used + rows - skipped > height {
+                    self.scroll_down(used + rows - skipped - height);
+                }
+                return;
+            }
+
+            used += rows - skipped;
+            if used >= height {
+                // The cursor fell past the window: anchor it at the top.
+                self.top = self.cursor;
+                self.skip = 0;
+                return;
+            }
+            position += 1;
+        }
+    }
+
+    /// Moves the window anchor `rows` rows further down the list.
+    fn scroll_down(&mut self, rows: usize) {
+        let mut remaining = rows;
+        while remaining > 0 {
+            let entry_rows = self.entry_height(self.top);
+            let visible = entry_rows - self.skip.min(entry_rows - 1);
+            if remaining < visible {
+                self.skip += remaining;
+                return;
+            }
+            remaining -= visible;
+            if self.top + 1 >= self.filtered.len() {
+                return;
+            }
+            self.top += 1;
+            self.skip = 0;
+        }
     }
 
     /// Index into `entries` under the cursor, if the list is non-empty.

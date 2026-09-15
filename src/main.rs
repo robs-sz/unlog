@@ -2,6 +2,7 @@
 
 mod app;
 mod history;
+mod text;
 mod ui;
 
 use std::io::{self, Stdout};
@@ -60,8 +61,8 @@ fn restore_terminal() {
 fn event_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io::Result<()> {
     loop {
         let size = terminal.size()?;
-        app.viewport = ui::layout(Rect::new(0, 0, size.width, size.height)).list.height as usize;
-        app.ensure_visible();
+        let list = ui::layout(Rect::new(0, 0, size.width, size.height)).list;
+        app.set_viewport(list.width as usize, list.height as usize);
 
         terminal.draw(|frame| ui::render(frame, app))?;
         // A write failure is reported for exactly one frame.
