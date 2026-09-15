@@ -87,6 +87,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
     }
     match app.mode {
         Mode::Normal => return handle_normal(app, key),
+        Mode::Range => handle_range(app, key),
         Mode::FilterText => handle_text_filter(app, key),
         Mode::FilterMinLen => handle_length_filter(app, key, LengthFilter::Min),
         Mode::FilterMaxLen => handle_length_filter(app, key, LengthFilter::Max),
@@ -102,6 +103,9 @@ fn handle_normal(app: &mut App, key: KeyEvent) -> bool {
         KeyCode::Char('g') => app.goto(0),
         KeyCode::Char('G') => app.goto(usize::MAX),
         KeyCode::Char(' ') => app.toggle_selection(),
+        KeyCode::Char('v') => app.begin_range(),
+        KeyCode::Char('a') => app.toggle_select_all(),
+        KeyCode::Char('r') => app.toggle_order(),
         KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             do_delete(app, true);
         }
@@ -116,6 +120,25 @@ fn handle_normal(app: &mut App, key: KeyEvent) -> bool {
         _ => {}
     }
     false
+}
+
+/// Range mode: navigation extends the range, so the only new keys are the ways
+/// to end it. `Esc` puts back the selection the range started from.
+fn handle_range(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => app.move_cursor(1),
+        KeyCode::Char('k') | KeyCode::Up => app.move_cursor(-1),
+        KeyCode::Char('g') => app.goto(0),
+        KeyCode::Char('G') => app.goto(usize::MAX),
+        KeyCode::Char('v') | KeyCode::Char(' ') | KeyCode::Enter => app.finish_range(),
+        KeyCode::Esc => app.cancel_range(),
+        KeyCode::Char('a') => {
+            app.finish_range();
+            app.toggle_select_all();
+        }
+        KeyCode::Char('d') | KeyCode::Delete => do_delete(app, false),
+        _ => {}
+    }
 }
 
 /// Removes entries from memory and immediately rewrites the history file.

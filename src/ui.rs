@@ -142,6 +142,12 @@ fn filter_line(app: &App) -> Line<'_> {
             Style::default().fg(Color::White),
         ),
     ];
+    if app.reversed {
+        spans.push(Span::styled(
+            " | Order: newest first",
+            Style::default().fg(Color::Cyan),
+        ));
+    }
     if !app.selected.is_empty() {
         spans.push(Span::styled(
             format!(" | Sel: {}", app.selected.len()),
@@ -152,14 +158,21 @@ fn filter_line(app: &App) -> Line<'_> {
 }
 
 fn status_line(app: &App) -> Line<'_> {
-    match &app.error_msg {
-        Some(message) => Line::styled(
+    if let Some(message) = &app.error_msg {
+        return Line::styled(
             format!(" {message}"),
             Style::default().fg(Color::Black).bg(Color::Red),
-        ),
-        None => Line::styled(
-            " / filter  m minlen  M maxlen  Space select  d delete  Ctrl+d delete one  q quit",
-            Style::default().fg(Color::DarkGray),
-        ),
+        );
     }
+    let hint = match app.mode {
+        Mode::Normal => {
+            " / filter  m minlen  M maxlen  Space select  v range  a all  r order  d delete  Ctrl+d delete one  q quit"
+        }
+        Mode::Range => {
+            " range: j/k extend  v Enter Space keep  Esc undo range  a all  d delete"
+        }
+        Mode::FilterText => " type to filter  Enter/Esc done",
+        Mode::FilterMinLen | Mode::FilterMaxLen => " digits, Enter/Esc done",
+    };
+    Line::styled(hint, Style::default().fg(Color::DarkGray))
 }

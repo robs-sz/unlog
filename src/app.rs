@@ -13,10 +13,12 @@ const GAP_WIDTH: usize = 2;
 /// Minimum width of the entry index column.
 const MIN_INDEX_WIDTH: usize = 5;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mode {
     /// Navigating the list; selection and delete keys are live.
     Normal,
+    /// Extending a range selection from an anchor position.
+    Range,
     /// Typing the text search.
     FilterText,
     /// Typing the minimum command length.
@@ -28,10 +30,19 @@ pub enum Mode {
 pub struct App {
     /// All loaded entries. Shrinks on delete; indices are positions here.
     pub entries: Vec<HistoryEntry>,
-    /// Indices into `entries` matching the current filters, in file order.
+    /// Indices into `entries` matching the current filters, in view order.
     pub filtered: Vec<usize>,
+    /// Whether the view runs newest entry first instead of file order.
+    pub reversed: bool,
     /// Indices into `entries` selected for deletion.
     pub selected: HashSet<usize>,
+    /// Position within `filtered` the active range started at; `None` outside
+    /// `Mode::Range`.
+    anchor: Option<usize>,
+    /// `selected` as it was when the range started. The range is recomputed
+    /// from this on every cursor move, so sweeping back and forth over the same
+    /// entries neither accumulates nor drops anything.
+    base: HashSet<usize>,
     /// Case-insensitive substring match; empty means match all.
     pub text_filter: String,
     /// Minimum command length in characters; `None` means no lower bound.
@@ -60,7 +71,10 @@ impl App {
         let mut app = Self {
             entries,
             filtered: Vec::new(),
+            reversed: false,
             selected: HashSet::new(),
+            anchor: None,
+            base: HashSet::new(),
             text_filter: String::new(),
             min_length: None,
             max_length: None,
@@ -79,6 +93,11 @@ impl App {
 
     /// Recomputes `filtered` and keeps the cursor inside the result.
     pub fn apply_filters(&mut self) {
+        // A range is anchored to a position in the previous view, which no
+        // longer exists; its entries stay selected.
+        self.anchor = None;
+        self.base.clear();
+
         let needle = self.text_filter.to_lowercase();
         let min = self.min_length;
         let max = self.max_length;
@@ -93,6 +112,10 @@ impl App {
             })
             .map(|(index, _)| index)
             .collect();
+
+        if self.reversed {
+            self.filtered.reverse();
+        }
 
         if self.filtered.is_empty() {
             self.cursor = 0;
@@ -224,6 +247,7 @@ impl App {
         let last = self.filtered.len() - 1;
         self.cursor = self.cursor.saturating_add_signed(delta).min(last);
         self.ensure_visible();
+        self.extend_range();
     }
 
     pub fn goto(&mut self, position: usize) {
@@ -232,6 +256,80 @@ impl App {
         }
         self.cursor = position.min(self.filtered.len() - 1);
         self.ensure_visible();
+        self.extend_range();
+    }
+
+    /// Starts a range at the cursor. The entry under it is selected right away,
+    /// and every move until the range ends extends the selection to the cursor.
+    pub fn begin_range(&mut self) {
+        if self.cursor_entry().is_none() {
+            return;
+        }
+        self.anchor = Some(self.cursor);
+        self.base = self.selected.clone();
+        self.mode = Mode::Range;
+        self.extend_range();
+    }
+
+    /// Ends the range, keeping the selection it produced.
+    pub fn finish_range(&mut self) {
+        self.anchor = None;
+        self.base.clear();
+        self.mode = Mode::Normal;
+    }
+
+    /// Ends the range, restoring the selection from before it started.
+    pub fn cancel_range(&mut self) {
+        self.selected = std::mem::take(&mut self.base);
+        self.anchor = None;
+        self.mode = Mode::Normal;
+    }
+
+    /// Re-selects everything between the anchor and the cursor, on top of the
+    /// selection the range started from.
+    fn extend_range(&mut self) {
+        let Some(anchor) = self.anchor else {
+            return;
+        };
+        let [lo, hi] = if anchor <= self.cursor {
+            [anchor, self.cursor]
+        } else {
+            [self.cursor, anchor]
+        };
+        self.selected = self.base.clone();
+        if let Some(range) = self.filtered.get(lo..=hi) {
+            self.selected.extend(range.iter().copied());
+        }
+    }
+
+    /// Flips between file order and newest first, leaving the cursor on the
+    /// same entry so the view does not jump off what is being read.
+    pub fn toggle_order(&mut self) {
+        let sticking = self.cursor_entry();
+        self.finish_range();
+        self.reversed = !self.reversed;
+        self.apply_filters();
+        if let Some(index) = sticking
+            && let Some(position) = self.filtered.iter().position(|&entry| entry == index)
+        {
+            self.cursor = position;
+            self.ensure_visible();
+        }
+    }
+
+    /// Selects every entry in the current view, or clears the view's entries
+    /// when they are all selected already. Entries filtered out are untouched.
+    pub fn toggle_select_all(&mut self) {
+        if self.filtered.is_empty() {
+            return;
+        }
+        if self.filtered.iter().all(|index| self.selected.contains(index)) {
+            for index in &self.filtered {
+                self.selected.remove(index);
+            }
+        } else {
+            self.selected.extend(self.filtered.iter().copied());
+        }
     }
 
     pub fn toggle_selection(&mut self) {
@@ -263,7 +361,104 @@ impl App {
             .map(|(_, entry)| entry)
             .collect();
         self.selected.clear();
+        // Positions shifted, so an active range has nothing left to extend.
+        self.mode = Mode::Normal;
         self.apply_filters();
         removed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app(commands: &[&str]) -> App {
+        let entries = commands
+            .iter()
+            .map(|command| HistoryEntry {
+                command: command.to_string(),
+                raw: command.as_bytes().to_vec(),
+            })
+            .collect();
+        App::new(entries, PathBuf::from("history"))
+    }
+
+    #[test]
+    fn range_selects_exactly_what_it_sweeps() {
+        let mut app = app(&["a", "b", "c", "d", "e"]);
+        app.goto(3);
+        app.begin_range();
+        assert_eq!(app.selected, HashSet::from([3]));
+
+        app.move_cursor(-2);
+        assert_eq!(app.selected, HashSet::from([1, 2, 3]));
+
+        // Sweeping back narrows the range instead of keeping what it crossed.
+        app.move_cursor(1);
+        assert_eq!(app.selected, HashSet::from([2, 3]));
+    }
+
+    #[test]
+    fn range_starts_from_the_existing_selection() {
+        let mut app = app(&["a", "b", "c", "d"]);
+        app.goto(0);
+        app.toggle_selection();
+
+        app.goto(2);
+        app.begin_range();
+        app.move_cursor(1);
+        app.cancel_range();
+        assert_eq!(app.selected, HashSet::from([0]), "Esc puts the range back");
+        assert_eq!(app.mode, Mode::Normal);
+
+        app.goto(2);
+        app.begin_range();
+        app.move_cursor(1);
+        app.finish_range();
+        assert_eq!(app.selected, HashSet::from([0, 2, 3]));
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn range_does_not_survive_a_new_filter() {
+        let mut app = app(&["alpha", "beta", "beta two"]);
+        app.goto(1);
+        app.begin_range();
+        app.move_cursor(1);
+
+        app.text_filter = "beta".to_string();
+        app.apply_filters();
+        assert_eq!(app.selected, HashSet::from([1, 2]));
+
+        // The old anchor positions are gone, so nothing new gets swept in.
+        app.move_cursor(-1);
+        assert_eq!(app.selected, HashSet::from([1, 2]));
+    }
+
+    #[test]
+    fn select_all_covers_the_view_and_toggles_back() {
+        let mut app = app(&["keep me", "drop one", "drop two"]);
+        app.text_filter = "drop".to_string();
+        app.apply_filters();
+
+        app.toggle_select_all();
+        assert_eq!(app.selected, HashSet::from([1, 2]));
+
+        app.toggle_select_all();
+        assert!(app.selected.is_empty());
+    }
+
+    #[test]
+    fn reversing_flips_the_view_and_holds_the_cursor() {
+        let mut app = app(&["a", "b", "c"]);
+        app.goto(0);
+
+        app.toggle_order();
+        assert_eq!(app.filtered, [2, 1, 0]);
+        assert_eq!(app.cursor_entry(), Some(0));
+
+        app.toggle_order();
+        assert_eq!(app.filtered, [0, 1, 2]);
+        assert_eq!(app.cursor_entry(), Some(0));
     }
 }

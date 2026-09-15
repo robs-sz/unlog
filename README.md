@@ -27,12 +27,30 @@ then `~/.bash_history`.
 | `/` | filter by case-insensitive substring |
 | `m` / `M` | minimum / maximum command length |
 | `Space` | select the entry under the cursor |
+| `v` | start a range selection at the cursor |
+| `a` | select everything in the current view; again to clear it |
+| `r` | newest first / file order |
 | `d` | delete the selection, or the entry under the cursor when nothing is selected |
 | `Ctrl+d` | delete the entry under the cursor, ignoring the selection |
 | `q`, `Esc`, `Ctrl+c` | quit |
 
 `Enter` or `Esc` leaves the filter and length prompts; the filter bar shows the active
 filters and how many entries they left.
+
+**Range selection.** `v` anchors a range at the cursor and every move (`j`/`k`, `g`/`G`,
+arrows) extends the selection to the cursor, so sweeping back narrows it again. `v`,
+`Space` or `Enter` keeps the range and leaves the mode, `Esc` abandons it and restores
+the selection as it was before. `d` works from inside the mode, so `v`, `jjj`, `d`
+deletes three entries.
+
+**Select all.** `a` selects every entry in the current view, which with a filter active is
+exactly the filtered set: `/`, `a`, `d` clears matching entries. Pressing `a` again
+removes the view's entries from the selection. Entries outside the view are never touched,
+so a narrower filter never clears selection work done under a wider one.
+
+**Order.** `r` flips between file order (oldest first) and newest first, keeping the
+cursor on the entry it was on; the view scrolls to follow it, and `g`/`G` jump to either
+end of the view. The filter bar shows `Order: newest first` while it is flipped.
 
 ## Formats
 
