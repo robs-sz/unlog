@@ -1,0 +1,9 @@
+[package]
+name = "unlog"
+description = "Browse, filter and prune shell history in a terminal"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+crossterm = "0.29.0"
+ratatui = "0.30.2"
