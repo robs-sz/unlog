@@ -18,6 +18,7 @@ use std::env;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::ffi::OsStr;
 
 #[derive(Clone, Debug)]
 pub struct HistoryEntry {
@@ -34,9 +35,22 @@ impl HistoryEntry {
     }
 }
 
-/// Locates the history file to operate on:
-/// `$HISTFILE` if set and readable, else `~/.zsh_history`, else `~/.bash_history`.
-pub fn history_path() -> Result<PathBuf, String> {
+/// Locates the history file to operate on: an explicit path from the command
+/// line first, then `$HISTFILE` if exported and readable, then
+/// `~/.zsh_history`, then `~/.bash_history`.
+///
+/// Only an *exported* `HISTFILE` is visible here. zsh is usually told its
+/// history file as a shell parameter (macOS `/etc/zshrc` and oh-my-zsh both set
+/// it without exporting), which never reaches another process, so the fallback
+/// and the explicit path matter: a shell can be using one file while this
+/// process would resolve to another.
+pub fn history_path(explicit: Option<&OsStr>) -> Result<PathBuf, String> {
+    if let Some(raw) = explicit {
+        let raw = raw.to_string_lossy();
+        if !raw.trim().is_empty() {
+            return Ok(expand_tilde(raw.trim()));
+        }
+    }
     if let Some(raw) = env::var_os("HISTFILE") {
         let raw = raw.to_string_lossy();
         let raw = raw.trim();
@@ -59,6 +73,17 @@ pub fn history_path() -> Result<PathBuf, String> {
     }
 
     Err("No history file found. Set HISTFILE.".to_string())
+}
+
+/// `path` with a leading `$HOME` shortened to `~`, for the status bar.
+pub fn display_path(path: &Path) -> String {
+    if let Some(home) = env::var_os("HOME")
+        && let Ok(rest) = path.strip_prefix(Path::new(&home))
+        && !rest.as_os_str().is_empty()
+    {
+        return format!("~/{}", rest.display());
+    }
+    path.display().to_string()
 }
 
 fn expand_tilde(value: &str) -> PathBuf {

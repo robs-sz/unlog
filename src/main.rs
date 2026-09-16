@@ -5,6 +5,7 @@ mod history;
 mod text;
 mod ui;
 
+use std::env;
 use std::io::{self, Stdout};
 use std::process::exit;
 use std::time::Duration;
@@ -20,7 +21,8 @@ use ratatui::layout::Rect;
 use app::{App, Mode};
 
 fn main() {
-    let path = match history::history_path() {
+    let explicit = env::args_os().nth(1);
+    let path = match history::history_path(explicit.as_deref()) {
         Ok(path) => path,
         Err(message) => {
             eprintln!("unlog: {message}");

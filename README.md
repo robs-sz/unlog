@@ -12,11 +12,22 @@ cargo install --path .
 ## Run
 
 ```sh
-unlog
+unlog [history file]
 ```
 
-The file it edits is `$HISTFILE` when that is set and readable, otherwise `~/.zsh_history`,
-then `~/.bash_history`.
+The file it edits is the path given as an argument, otherwise `$HISTFILE` when that is set and
+readable, otherwise `~/.zsh_history`, then `~/.bash_history`. Whichever it settles on is shown
+at the top right of the screen, so the file a delete would rewrite is visible before anything
+is deleted.
+
+Only an *exported* `HISTFILE` reaches another process. zsh is normally told its history file as
+a shell parameter — macOS `/etc/zshrc` and oh-my-zsh both set it that way, without exporting —
+so unlog cannot see it and falls back to `~/.zsh_history`, which need not be the file the shell
+is using. Name the file when the two differ:
+
+```sh
+unlog ~/.config/zsh/history
+```
 
 ## Keys
 

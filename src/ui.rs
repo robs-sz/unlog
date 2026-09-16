@@ -7,6 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::app::{App, Mode};
+use crate::history;
 use crate::text;
 
 /// Vertical split of the terminal: filter bar, list, status bar.
@@ -29,7 +30,7 @@ pub fn layout(area: Rect) -> Areas {
 pub fn render(frame: &mut Frame, app: &App) {
     let areas = layout(frame.area());
 
-    frame.render_widget(Paragraph::new(filter_line(app)), areas.filter);
+    frame.render_widget(Paragraph::new(filter_line(app, areas.filter.width)), areas.filter);
     frame.render_widget(Paragraph::new(status_line(app)), areas.help);
     frame.render_widget(Paragraph::new(list_lines(app, areas.list)), areas.list);
 }
@@ -95,7 +96,7 @@ fn row_style(app: &App, position: usize) -> Style {
     style
 }
 
-fn filter_line(app: &App) -> Line<'_> {
+fn filter_line(app: &App, width: u16) -> Line<'_> {
     let picked = Style::default()
         .fg(Color::Black)
         .bg(Color::Yellow)
@@ -154,9 +155,39 @@ fn filter_line(app: &App) -> Line<'_> {
             Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
         ));
     }
+    push_target(&mut spans, app, width);
     Line::from(spans)
 }
 
+/// Adds the file a delete would rewrite, right aligned.
+///
+/// It belongs on screen because the file unlog resolved need not be the one the
+/// shell is using: `HISTFILE` is a shell parameter that other processes cannot
+/// see. The path falls back to the bare file name, then to nothing, on terminals
+/// too narrow to hold it beside the filters.
+fn push_target<'a>(spans: &mut Vec<Span<'a>>, app: &App, width: u16) {
+    let used = || -> usize {
+        spans.iter().map(|span| span.content.chars().count()).sum()
+    };
+    let path = history::display_path(&app.history_path);
+    let name = app
+        .history_path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned());
+
+    let label = [Some(path), name]
+        .into_iter()
+        .flatten()
+        .find(|label| used() + label.chars().count() + 2 <= width as usize);
+    if let Some(label) = label {
+        let pad = width as usize - used() - label.chars().count() - 1;
+        spans.push(Span::raw(" ".repeat(pad)));
+        spans.push(Span::styled(label, Style::default().fg(Color::Cyan)));
+    }
+}
+
+/// The status bar: the keys that do something in the mode being typed in, or the
+/// last write failure.
 fn status_line(app: &App) -> Line<'_> {
     if let Some(message) = &app.error_msg {
         return Line::styled(
