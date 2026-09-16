@@ -66,6 +66,25 @@ fc -p $HISTFILE   # push a fresh list and read the file into it
 `fc -R` does not help — it adds the file's entries to the list instead of replacing it.
 In bash, `history -c && history -r`. Opening a new shell always works.
 
+Reloading can be automatic for the shell unlog was launched from:
+
+```sh
+# in your .zshrc
+unlog() { command unlog "$@"; fc -P 2>/dev/null; fc -p $HISTFILE }
+```
+
+The list equals the file again the moment the pruning session ends, so Ctrl+R stops
+offering what was deleted; the cost is that the `unlog` command itself is not kept in
+history, since it went into the list that was pushed away. A `precmd` hook that reloads
+when the file's size shrinks covers deletions made from another terminal, but it can drop
+commands the shell has not written out yet, so the wrapper is the safer half of the pair.
+
+Because a rewrite makes the file shorter, a shell with `SHARE_HISTORY` can also re-read it
+from a stale offset and import entries the list already holds, so a running list ends up
+with duplicates as well as the deleted entries; that is a second reason for `fc -p`. In a
+three entry file, deleting one entry left the shell listing six events, one of them twice,
+while the file held two.
+
 The reverse lag is worth knowing too: with `SHARE_HISTORY` or `INC_APPEND_HISTORY`, zsh
 writes a command to the file at the next prompt, so the newest command may not be on disk
 yet when unlog loads it, and unlog reads the file once at startup.
