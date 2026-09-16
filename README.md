@@ -52,6 +52,24 @@ so a narrower filter never clears selection work done under a wider one.
 cursor on the entry it was on; the view scrolls to follow it, and `g`/`G` jump to either
 end of the view. The filter bar shows `Order: newest first` while it is flipped.
 
+## Ctrl+R still finds deleted commands
+
+The file is rewritten the moment you delete, but a shell answers Ctrl+R from its own
+in-memory copy of the history, and nothing another process writes can reach into that copy.
+Entries therefore stay findable in an open shell until it reloads its list; unlog reminds
+you on exit when it deleted something. In zsh:
+
+```sh
+fc -p $HISTFILE   # push a fresh list and read the file into it
+```
+
+`fc -R` does not help — it adds the file's entries to the list instead of replacing it.
+In bash, `history -c && history -r`. Opening a new shell always works.
+
+The reverse lag is worth knowing too: with `SHARE_HISTORY` or `INC_APPEND_HISTORY`, zsh
+writes a command to the file at the next prompt, so the newest command may not be on disk
+yet when unlog loads it, and unlog reads the file once at startup.
+
 ## Formats
 
 Both zsh extended history (`: <timestamp>:<duration>;<command>`, embedded newlines escaped)

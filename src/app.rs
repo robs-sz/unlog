@@ -62,6 +62,9 @@ pub struct App {
     pub list_width: usize,
     pub mode: Mode,
     pub history_path: PathBuf,
+    /// Entries deleted from the history file this session, for the notice
+    /// printed after the screen is restored.
+    pub deleted: usize,
     /// Write failure shown in the status bar for one frame.
     pub error_msg: Option<String>,
 }
@@ -85,6 +88,7 @@ impl App {
             list_width: 80,
             mode: Mode::Normal,
             history_path,
+            deleted: 0,
             error_msg: None,
         };
         app.apply_filters();

@@ -41,6 +41,26 @@ fn main() {
         eprintln!("unlog: {error}");
         exit(1);
     }
+    if app.deleted > 0 {
+        eprintln!("{}", deletion_notice(app.deleted, &app.history_path));
+    }
+}
+
+/// Tells the user how to make already-open shells forget the deleted entries.
+///
+/// Deleting rewrites the history file, but a shell keeps its own in-memory list
+/// and searches that for Ctrl+R, so the entries stay findable until the shell
+/// reloads. zsh only imports new lines into a running list, and `fc -R` adds to
+/// it rather than replacing it, so the list has to be pushed and re-read from
+/// the file: that is what `fc -p $HISTFILE` does.
+fn deletion_notice(deleted: usize, path: &std::path::Path) -> String {
+    let entries = if deleted == 1 { "entry" } else { "entries" };
+    format!(
+        "unlog: removed {deleted} {entries} from {}. Shells that were already open still hold them \
+         in memory, which is where Ctrl+R searches: run `fc -p $HISTFILE` in zsh (or `history -c && \
+         history -r` in bash), or open a new shell, to drop them.",
+        path.display()
+    )
 }
 
 fn run(app: &mut App) -> io::Result<()> {
@@ -153,6 +173,8 @@ fn do_delete(app: &mut App, cursor_only: bool) {
             "could not write {}: {error} ({removed} entries removed in memory only)",
             app.history_path.display()
         ));
+    } else {
+        app.deleted += removed;
     }
 }
 
